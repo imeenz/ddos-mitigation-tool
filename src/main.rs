@@ -6,6 +6,7 @@ mod detection;
 mod metrics;
 mod mitigation;
 
+use capture::device;
 use config::Config;
 use tracing::info;
 
@@ -24,6 +25,17 @@ async fn main() -> anyhow::Result<()> {
         log_level = %config.log_level,
         "Configuration loaded"
     );
-
+    let devices = device::list_interfaces()?;
+    if let Some(device) = devices.into_iter().find(|device| {
+        device
+            .desc
+            .as_deref()
+            .map(|desc| desc.contains("Intel"))
+            .unwrap_or(false)
+    }) {
+        capture::sniffer::start_capture(device)?;
+    } else {
+        eprintln!("Wi-Fi interface not found.");
+    }
     Ok(())
 }
