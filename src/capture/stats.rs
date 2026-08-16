@@ -78,6 +78,14 @@ impl TrafficStats {
 
         ports
     }
+    pub fn top_source_concentration(&self) -> f64 {
+        if self.packet_count == 0 {
+            return 0.0;
+        }
+        let top_count = self.source_ips.values().copied().max().unwrap_or(0);
+
+        top_count as f64 / self.packet_count as f64
+    }
 
     pub fn should_report(&self) -> bool {
         self.window_start.elapsed() >= Duration::from_secs(1)
@@ -162,5 +170,18 @@ mod tests {
         assert_eq!(stats.tcp_packets, 0);
         assert!(stats.top_source_ips(5).is_empty());
         assert!(stats.top_destination_ports(5).is_empty());
+    }
+    #[test]
+    fn calculates_top_source_concentration() {
+        let mut stats = TrafficStats::new();
+
+        stats.record_packet(Some("10.0.0.1"), Some(443), "TCP", 100);
+        stats.record_packet(Some("10.0.0.1"), Some(443), "TCP", 100);
+        stats.record_packet(Some("10.0.0.1"), Some(443), "TCP", 100);
+        stats.record_packet(Some("10.0.0.2"), Some(443), "TCP", 100);
+
+        let concentration = stats.top_source_concentration();
+
+        assert!((concentration - 0.75).abs() < f64::EPSILON);
     }
 }
