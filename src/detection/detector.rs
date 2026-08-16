@@ -59,6 +59,7 @@ pub struct AnomalyResult {
     pub z_score: f64,
     pub source_concentration: f64,
     pub destination_port_concentration: f64,
+    pub anomaly_score: f64,
     pub anomalous: bool,
 }
 
@@ -72,26 +73,36 @@ pub fn evaluate(
     let mean = baseline.mean()?;
     let standard_deviation = baseline.standard_deviation()?;
 
-    if standard_deviation == 0.0 {
-        return Some(AnomalyResult {
-            current_value: current_packets_per_second as f64,
-            z_score: 0.0,
-            source_concentration,
-            destination_port_concentration,
-            anomalous: current_packets_per_second as f64 > mean,
-        });
-    }
-
     let current_value = current_packets_per_second as f64;
 
-    let z_score = (current_value - mean) / standard_deviation;
+    let z_score = if standard_deviation == 0.0 {
+        if current_value > mean { threshold } else { 0.0 }
+    } else {
+        (current_value - mean) / standard_deviation
+    };
+
+    // Normalize the traffic anomaly component to 0.0–1.0.
+    let traffic_score = if z_score <= 0.0 {
+        0.0
+    } else {
+        (z_score / threshold).clamp(0.0, 1.0)
+    };
+
+    // Concentration values are already expected to be 0.0–1.0.
+    let source_score = source_concentration.clamp(0.0, 1.0);
+
+    let port_score = destination_port_concentration.clamp(0.0, 1.0);
+
+    // Weighted combined anomaly score.
+    let anomaly_score = (traffic_score * 0.60) + (source_score * 0.20) + (port_score * 0.20);
 
     Some(AnomalyResult {
         current_value,
         z_score,
         source_concentration,
         destination_port_concentration,
-        anomalous: z_score >= threshold,
+        anomaly_score,
+        anomalous: anomaly_score >= 0.80,
     })
 }
 
@@ -201,6 +212,7 @@ mod tests {
 
         assert!(result.anomalous);
         assert!(result.z_score > 3.0);
+        assert!(result.anomaly_score >= 0.80);
         assert_eq!(result.current_value, 200.0);
         assert_eq!(result.source_concentration, 0.50);
         assert_eq!(result.destination_port_concentration, 0.80);
@@ -219,6 +231,7 @@ mod tests {
         let result = evaluate(&baseline, 105, 0.50, 0.40, 3.0).unwrap();
 
         assert!(!result.anomalous);
+        assert!(result.anomaly_score < 0.80);
     }
 
     #[test]
@@ -266,6 +279,7 @@ mod tests {
 
         assert!(result.anomalous);
         assert!(result.z_score > 3.0);
+        assert!(result.anomaly_score >= 0.80);
         assert_eq!(result.current_value, 500.0);
         assert_eq!(result.destination_port_concentration, 0.80);
     }
@@ -283,5 +297,22 @@ mod tests {
         let result = engine.process(105, 0.50, 0.40).unwrap();
 
         assert!(!result.anomalous);
+        assert!(result.anomaly_score < 0.80);
+    }
+
+    #[test]
+    fn combined_score_detects_multiple_signals() {
+        let mut baseline = TrafficBaseline::new(5);
+
+        baseline.add_sample(100);
+        baseline.add_sample(100);
+        baseline.add_sample(100);
+        baseline.add_sample(100);
+        baseline.add_sample(100);
+
+        let result = evaluate(&baseline, 100, 0.95, 0.95, 3.0).unwrap();
+
+        assert!(!result.anomalous);
+        assert!(result.anomaly_score >= 0.30);
     }
 }
