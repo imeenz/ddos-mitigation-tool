@@ -58,6 +58,7 @@ pub struct AnomalyResult {
     pub current_value: f64,
     pub z_score: f64,
     pub source_concentration: f64,
+    pub destination_port_concentration: f64,
     pub anomalous: bool,
 }
 
@@ -65,6 +66,7 @@ pub fn evaluate(
     baseline: &TrafficBaseline,
     current_packets_per_second: u64,
     source_concentration: f64,
+    destination_port_concentration: f64,
     threshold: f64,
 ) -> Option<AnomalyResult> {
     let mean = baseline.mean()?;
@@ -75,6 +77,7 @@ pub fn evaluate(
             current_value: current_packets_per_second as f64,
             z_score: 0.0,
             source_concentration,
+            destination_port_concentration,
             anomalous: current_packets_per_second as f64 > mean,
         });
     }
@@ -87,6 +90,7 @@ pub fn evaluate(
         current_value,
         z_score,
         source_concentration,
+        destination_port_concentration,
         anomalous: z_score >= threshold,
     })
 }
@@ -109,6 +113,7 @@ impl DetectionEngine {
         &mut self,
         packets_per_second: u64,
         source_concentration: f64,
+        destination_port_concentration: f64,
     ) -> Option<AnomalyResult> {
         if !self.baseline.is_ready() {
             self.baseline.add_sample(packets_per_second);
@@ -119,6 +124,7 @@ impl DetectionEngine {
             &self.baseline,
             packets_per_second,
             source_concentration,
+            destination_port_concentration,
             self.threshold,
         );
 
@@ -191,12 +197,13 @@ mod tests {
         baseline.add_sample(95);
         baseline.add_sample(100);
 
-        let result = evaluate(&baseline, 200, 0.50, 3.0).unwrap();
+        let result = evaluate(&baseline, 200, 0.50, 0.80, 3.0).unwrap();
 
         assert!(result.anomalous);
         assert!(result.z_score > 3.0);
         assert_eq!(result.current_value, 200.0);
         assert_eq!(result.source_concentration, 0.50);
+        assert_eq!(result.destination_port_concentration, 0.80);
     }
 
     #[test]
@@ -209,7 +216,7 @@ mod tests {
         baseline.add_sample(95);
         baseline.add_sample(100);
 
-        let result = evaluate(&baseline, 105, 0.50, 3.0).unwrap();
+        let result = evaluate(&baseline, 105, 0.50, 0.40, 3.0).unwrap();
 
         assert!(!result.anomalous);
     }
@@ -218,7 +225,7 @@ mod tests {
     fn evaluation_requires_a_baseline() {
         let baseline = TrafficBaseline::new(5);
 
-        let result = evaluate(&baseline, 500, 0.50, 3.0);
+        let result = evaluate(&baseline, 500, 0.50, 0.80, 3.0);
 
         assert!(result.is_none());
     }
@@ -230,17 +237,17 @@ mod tests {
         assert!(!engine.baseline_ready());
         assert_eq!(engine.sample_count(), 0);
 
-        assert!(engine.process(100, 0.50).is_none());
+        assert!(engine.process(100, 0.50, 0.40).is_none());
         assert_eq!(engine.sample_count(), 1);
 
-        assert!(engine.process(105, 0.50).is_none());
+        assert!(engine.process(105, 0.50, 0.40).is_none());
         assert_eq!(engine.sample_count(), 2);
 
-        assert!(engine.process(110, 0.50).is_none());
+        assert!(engine.process(110, 0.50, 0.40).is_none());
         assert!(engine.baseline_ready());
         assert_eq!(engine.sample_count(), 3);
 
-        let result = engine.process(105, 0.50);
+        let result = engine.process(105, 0.50, 0.40);
 
         assert!(result.is_some());
     }
@@ -249,30 +256,31 @@ mod tests {
     fn detection_engine_detects_anomaly_after_learning() {
         let mut engine = DetectionEngine::new(5, 3.0);
 
-        engine.process(100, 0.50);
-        engine.process(105, 0.50);
-        engine.process(110, 0.50);
-        engine.process(95, 0.50);
-        engine.process(100, 0.50);
+        engine.process(100, 0.50, 0.40);
+        engine.process(105, 0.50, 0.40);
+        engine.process(110, 0.50, 0.40);
+        engine.process(95, 0.50, 0.40);
+        engine.process(100, 0.50, 0.40);
 
-        let result = engine.process(500, 0.50).unwrap();
+        let result = engine.process(500, 0.50, 0.80).unwrap();
 
         assert!(result.anomalous);
         assert!(result.z_score > 3.0);
         assert_eq!(result.current_value, 500.0);
+        assert_eq!(result.destination_port_concentration, 0.80);
     }
 
     #[test]
     fn detection_engine_accepts_normal_traffic() {
         let mut engine = DetectionEngine::new(5, 3.0);
 
-        engine.process(100, 0.50);
-        engine.process(105, 0.50);
-        engine.process(110, 0.50);
-        engine.process(95, 0.50);
-        engine.process(100, 0.50);
+        engine.process(100, 0.50, 0.40);
+        engine.process(105, 0.50, 0.40);
+        engine.process(110, 0.50, 0.40);
+        engine.process(95, 0.50, 0.40);
+        engine.process(100, 0.50, 0.40);
 
-        let result = engine.process(105, 0.50).unwrap();
+        let result = engine.process(105, 0.50, 0.40).unwrap();
 
         assert!(!result.anomalous);
     }
