@@ -67,6 +67,7 @@ pub fn start_capture(device: Device) -> Result<(), pcap::Error> {
             }
 
             let source_concentration = stats.top_source_concentration();
+
             let destination_port_concentration = stats.top_destination_port_concentration();
 
             if let Some(result) = detector.process(
@@ -80,20 +81,25 @@ pub fn start_capture(device: Device) -> Result<(), pcap::Error> {
                          Packets/sec: {:.2}\n\
                          Z-score: {:.2}\n\
                          Source concentration: {:.2}%\n\
-                         Destination port concentration: {:.2}%\n",
+                         Destination port concentration: {:.2}%\n\
+                         Combined anomaly score: {:.2}%\n",
                         result.current_value,
                         result.z_score,
                         result.source_concentration * 100.0,
                         result.destination_port_concentration * 100.0,
+                        result.anomaly_score * 100.0,
                     );
                 } else {
                     println!(
-                        "Traffic normal | Z-score: {:.2} | \
+                        "Traffic normal | \
+                         Z-score: {:.2} | \
                          Source concentration: {:.2}% | \
-                         Destination port concentration: {:.2}%",
+                         Destination port concentration: {:.2}% | \
+                         Anomaly score: {:.2}%",
                         result.z_score,
                         result.source_concentration * 100.0,
                         result.destination_port_concentration * 100.0,
+                        result.anomaly_score * 100.0,
                     );
                 }
             } else {
