@@ -33,7 +33,7 @@ async fn main() -> anyhow::Result<()> {
             .map(|desc| desc.contains("Intel"))
             .unwrap_or(false)
     }) {
-        capture::sniffer::start_capture(device)?;
+        capture::sniffer::start_capture(device, &config)?;
     } else {
         eprintln!("Wi-Fi interface not found.");
     }
