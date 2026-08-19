@@ -2,19 +2,9 @@ use crate::capture::parser::parse_packet;
 use crate::capture::stats::TrafficStats;
 use crate::config::Config;
 use crate::detection::detector::DetectionEngine;
-use crate::mitigation::{EnforcementResult, FirewallEnforcer, MitigationManager};
+use crate::mitigation::MitigationManager;
+use crate::mitigation::enforcer::{EnforcementResult, FirewallEnforcer};
 use pcap::{Capture, Device};
-fn is_local_or_reserved_source(source_ip: &str) -> bool {
-    match source_ip.parse::<std::net::IpAddr>() {
-        Ok(std::net::IpAddr::V4(ip)) => {
-            ip.is_loopback() || ip.is_unspecified() || ip.is_multicast() || ip.is_broadcast()
-        }
-        Ok(std::net::IpAddr::V6(ip)) => {
-            ip.is_loopback() || ip.is_unspecified() || ip.is_multicast()
-        }
-        Err(_) => true,
-    }
-}
 
 pub fn start_capture(device: Device, config: &Config) -> Result<(), pcap::Error> {
     println!("Opening interface: {}", device.name);
@@ -82,7 +72,6 @@ pub fn start_capture(device: Device, config: &Config) -> Result<(), pcap::Error>
             }
 
             let source_concentration = stats.top_source_concentration();
-
             let destination_port_concentration = stats.top_destination_port_concentration();
 
             if let Some(result) = detector.process(
@@ -107,26 +96,23 @@ pub fn start_capture(device: Device, config: &Config) -> Result<(), pcap::Error>
 
                     if result.anomaly_score >= config.mitigation_score_threshold {
                         if let Some((source_ip, _)) = stats.top_source_ips(1).first().copied() {
-                            let action = mitigation.block_ip(source_ip);
+                            if config
+                                .mitigation_protected_ips
+                                .iter()
+                                .any(|ip| ip == source_ip)
+                            {
+                                println!("MITIGATION: skipped — protected local IP {}", source_ip);
+                            } else {
+                                let action = mitigation.block_ip(source_ip);
 
-                            println!(
-                                "MITIGATION: {:?} applied to source IP {}",
-                                action, source_ip
-                            );
+                                println!(
+                                    "MITIGATION: {:?} applied to source IP {}",
+                                    action, source_ip
+                                );
 
-                            println!("Currently blocked IPs: {}", mitigation.blocked_count());
+                                println!("Currently blocked IPs: {}", mitigation.blocked_count());
 
-                            if config.mitigation_enforcement_enabled {
-                                if config
-                                    .mitigation_protected_ips
-                                    .iter()
-                                    .any(|ip| ip == source_ip)
-                                {
-                                    println!(
-                                        "ENFORCEMENT: skipped — protected local IP {}",
-                                        source_ip
-                                    );
-                                } else {
+                                if config.mitigation_enforcement_enabled {
                                     match enforcer.block_ip(source_ip) {
                                         EnforcementResult::Applied => {
                                             println!(
@@ -134,6 +120,7 @@ pub fn start_capture(device: Device, config: &Config) -> Result<(), pcap::Error>
                                                 source_ip
                                             );
                                         }
+
                                         EnforcementResult::Failed => {
                                             eprintln!(
                                                 "ENFORCEMENT: failed to block {} in Windows Firewall",
@@ -141,17 +128,16 @@ pub fn start_capture(device: Device, config: &Config) -> Result<(), pcap::Error>
                                             );
                                         }
                                     }
+                                } else {
+                                    println!("ENFORCEMENT: disabled — no firewall rule applied");
                                 }
-                            } else {
-                                println!("ENFORCEMENT: disabled — no firewall rule applied");
                             }
                         }
                     } else {
                         println!(
-                            "MITIGATION: skipped | anomaly score: {:.2}% \
-                             below threshold {:.2}%",
+                            "MITIGATION: skipped | anomaly score {:.2}% below threshold {:.2}%",
                             result.anomaly_score * 100.0,
-                            config.mitigation_score_threshold * 100.0,
+                            config.mitigation_score_threshold * 100.0
                         );
                     }
                 } else {
@@ -185,7 +171,7 @@ pub fn start_capture(device: Device, config: &Config) -> Result<(), pcap::Error>
                 info.destination_port
                     .map(|port| port.to_string())
                     .unwrap_or_else(|| "-".to_string()),
-                info.protocol
+                info.protocol,
             );
         }
     }

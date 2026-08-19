@@ -1,6 +1,6 @@
 pub mod enforcer;
 
-pub use enforcer::{EnforcementResult, FirewallEnforcer};
+pub use enforcer::FirewallEnforcer;
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
