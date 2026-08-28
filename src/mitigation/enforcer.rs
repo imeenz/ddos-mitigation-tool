@@ -1,3 +1,7 @@
+#[cfg(target_os = "windows")]
+use std::process::Command;
+
+#[cfg(target_os = "linux")]
 use std::process::Command;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -14,43 +18,91 @@ impl FirewallEnforcer {
     }
 
     pub fn block_ip(&self, source_ip: &str) -> EnforcementResult {
-        let rule_name = format!("DDoS-Mitigation-{}", source_ip);
+        #[cfg(target_os = "windows")]
+        {
+            let rule_name = format!("DDoS-Mitigation-{}", source_ip);
 
-        let result = Command::new("netsh")
-            .args([
-                "advfirewall",
-                "firewall",
-                "add",
-                "rule",
-                &format!("name={}", rule_name),
-                "dir=in",
-                "action=block",
-                &format!("remoteip={}", source_ip),
-            ])
-            .status();
+            let result = Command::new("netsh")
+                .args([
+                    "advfirewall",
+                    "firewall",
+                    "add",
+                    "rule",
+                    &format!("name={}", rule_name),
+                    "dir=in",
+                    "action=block",
+                    &format!("remoteip={}", source_ip),
+                ])
+                .status();
 
-        match result {
-            Ok(status) if status.success() => EnforcementResult::Applied,
-            _ => EnforcementResult::Failed,
+            match result {
+                Ok(status) if status.success() => EnforcementResult::Applied,
+                _ => EnforcementResult::Failed,
+            }
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            let element = format!("{{ {} timeout 60s }}", source_ip);
+
+            let result = Command::new("nft")
+                .args([
+                    "add",
+                    "element",
+                    "inet",
+                    "ddos_mitigation",
+                    "blocked_ips",
+                    &element,
+                ])
+                .status();
+
+            match result {
+                Ok(status) if status.success() => EnforcementResult::Applied,
+                _ => EnforcementResult::Failed,
+            }
         }
     }
 
     pub fn unblock_ip(&self, source_ip: &str) -> EnforcementResult {
-        let rule_name = format!("DDoS-Mitigation-{}", source_ip);
+        #[cfg(target_os = "windows")]
+        {
+            let rule_name = format!("DDoS-Mitigation-{}", source_ip);
 
-        let result = Command::new("netsh")
-            .args([
-                "advfirewall",
-                "firewall",
-                "delete",
-                "rule",
-                &format!("name={}", rule_name),
-            ])
-            .status();
+            let result = Command::new("netsh")
+                .args([
+                    "advfirewall",
+                    "firewall",
+                    "delete",
+                    "rule",
+                    &format!("name={}", rule_name),
+                ])
+                .status();
 
-        match result {
-            Ok(status) if status.success() => EnforcementResult::Applied,
-            _ => EnforcementResult::Failed,
+            match result {
+                Ok(status) if status.success() => EnforcementResult::Applied,
+                _ => EnforcementResult::Failed,
+            }
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            let element = format!("{{ {} }}", source_ip);
+
+            let result = Command::new("nft")
+                .args([
+                    "delete",
+                    "element",
+                    "inet",
+                    "ddos_mitigation",
+                    "blocked_ips",
+                    &element,
+                ])
+                .status();
+
+            match result {
+                Ok(status) if status.success() => EnforcementResult::Applied,
+                _ => EnforcementResult::Failed,
+            }
         }
     }
 }

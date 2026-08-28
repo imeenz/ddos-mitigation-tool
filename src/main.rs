@@ -6,12 +6,15 @@ mod detection;
 mod metrics;
 mod mitigation;
 
-use capture::device;
-use config::Config;
+use anyhow::Result;
 use tracing::info;
 
+use crate::capture::device;
+use crate::capture::sniffer;
+use crate::config::Config;
+
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
 
     info!("DDoS Mitigation Tool starting");
@@ -25,17 +28,32 @@ async fn main() -> anyhow::Result<()> {
         log_level = %config.log_level,
         "Configuration loaded"
     );
+
     let devices = device::list_interfaces()?;
-    if let Some(device) = devices.into_iter().find(|device| {
+
+    #[cfg(target_os = "linux")]
+    let capture_device = devices.iter().find(|device| device.name == "eth0");
+
+    #[cfg(target_os = "windows")]
+    let capture_device = devices.iter().find(|device| {
         device
             .desc
             .as_deref()
             .map(|desc| desc.contains("Intel"))
             .unwrap_or(false)
-    }) {
-        capture::sniffer::start_capture(device, &config)?;
+    });
+
+    if let Some(device) = capture_device {
+        info!(interface = %device.name, "Selected capture interface");
+
+        sniffer::start_capture(device.clone(), &config)?;
     } else {
-        eprintln!("Wi-Fi interface not found.");
+        #[cfg(target_os = "linux")]
+        eprintln!("Linux capture interface eth0 not found.");
+
+        #[cfg(target_os = "windows")]
+        eprintln!("Windows Wi-Fi/Intel interface not found.");
     }
+
     Ok(())
 }
