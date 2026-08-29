@@ -1,7 +1,3 @@
-#[cfg(target_os = "windows")]
-use std::process::Command;
-
-#[cfg(target_os = "linux")]
 use std::process::Command;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,8 +39,6 @@ impl FirewallEnforcer {
 
         #[cfg(target_os = "linux")]
         {
-            let element = format!("{{ {} timeout 60s }}", source_ip);
-
             let result = Command::new("nft")
                 .args([
                     "add",
@@ -52,7 +46,11 @@ impl FirewallEnforcer {
                     "inet",
                     "ddos_mitigation",
                     "blocked_ips",
-                    &element,
+                    "{",
+                    source_ip,
+                    "timeout",
+                    "60s",
+                    "}",
                 ])
                 .status();
 
@@ -60,6 +58,11 @@ impl FirewallEnforcer {
                 Ok(status) if status.success() => EnforcementResult::Applied,
                 _ => EnforcementResult::Failed,
             }
+        }
+
+        #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+        {
+            EnforcementResult::Failed
         }
     }
 
@@ -86,8 +89,6 @@ impl FirewallEnforcer {
 
         #[cfg(target_os = "linux")]
         {
-            let element = format!("{{ {} }}", source_ip);
-
             let result = Command::new("nft")
                 .args([
                     "delete",
@@ -95,7 +96,9 @@ impl FirewallEnforcer {
                     "inet",
                     "ddos_mitigation",
                     "blocked_ips",
-                    &element,
+                    "{",
+                    source_ip,
+                    "}",
                 ])
                 .status();
 
@@ -103,6 +106,11 @@ impl FirewallEnforcer {
                 Ok(status) if status.success() => EnforcementResult::Applied,
                 _ => EnforcementResult::Failed,
             }
+        }
+
+        #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+        {
+            EnforcementResult::Failed
         }
     }
 }
@@ -113,11 +121,31 @@ mod tests {
 
     #[test]
     fn enforcement_result_variants_are_distinct() {
-        assert_ne!(EnforcementResult::Applied, EnforcementResult::Failed);
+        assert_ne!(
+            EnforcementResult::Applied,
+            EnforcementResult::Failed
+        );
     }
 
     #[test]
     fn enforcer_can_be_created() {
         let _enforcer = FirewallEnforcer::new();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_enforcer_can_block_and_unblock_ip() {
+        let enforcer = FirewallEnforcer::new();
+        let test_ip = "192.0.2.1";
+
+        assert_eq!(
+            enforcer.block_ip(test_ip),
+            EnforcementResult::Applied
+        );
+
+        assert_eq!(
+            enforcer.unblock_ip(test_ip),
+            EnforcementResult::Applied
+        );
     }
 }
