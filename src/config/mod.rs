@@ -66,11 +66,5 @@ mod tests {
         assert!(config.mitigation_score_threshold <= 1.0);
 
         assert!(config.mitigation_block_duration_secs > 0);
-
-        assert!(
-            config
-                .mitigation_protected_ips
-                .contains(&"192.168.1.19".to_string())
-        );
     }
 }

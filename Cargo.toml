@@ -5,8 +5,10 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.104"
+aya = "0.14.0"
 dotenvy = "0.15.7"
 etherparse = "0.21.0"
+libc = "0.2.189"
 pcap = "2.4.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"

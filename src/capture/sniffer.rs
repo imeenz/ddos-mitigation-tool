@@ -7,7 +7,9 @@ use crate::detection::detector::DetectionEngine;
 use crate::metrics::Metrics;
 use crate::mitigation::MitigationManager;
 use crate::mitigation::enforcer::{EnforcementResult, FirewallEnforcer};
+use crate::mitigation::xdp::XdpBlocker;
 use pcap::{Capture, Device};
+use std::collections::HashSet;
 
 const ALERTS_FILE: &str = "data/alerts.json";
 const METRICS_FILE: &str = "data/metrics.json";
@@ -15,6 +17,16 @@ const MAX_STORED_ALERTS: usize = 100;
 
 pub fn start_capture(device: Device, config: &Config) -> Result<(), pcap::Error> {
     println!("Opening interface: {}", device.name);
+    let local_ipv4s: HashSet<String> = device
+        .addresses
+        .iter()
+        .filter_map(|address| match address.addr {
+            std::net::IpAddr::V4(ip) => Some(ip.to_string()),
+            _ => None,
+        })
+        .collect();
+
+    println!("Local capture IPv4 addresses: {:?}", local_ipv4s);
 
     let mut capture = Capture::from_device(device)?
         .promisc(true)
@@ -26,12 +38,22 @@ pub fn start_capture(device: Device, config: &Config) -> Result<(), pcap::Error>
 
     let mut packet_count = 0u64;
     let mut stats = TrafficStats::new();
-    let mut detector = DetectionEngine::new(10, 3.0);
+    let mut detector = DetectionEngine::new(10, 3.0, config.mitigation_score_threshold);
 
     let enforcer = FirewallEnforcer::new();
 
     let mut mitigation = MitigationManager::new(config.mitigation_block_duration_secs);
 
+    let mut xdp_blocker = match XdpBlocker::open() {
+        Ok(blocker) => {
+            println!("XDP: blocked_ips map opened successfully");
+            Some(blocker)
+        }
+        Err(error) => {
+            eprintln!("XDP: could not open blocked_ips map: {}", error);
+            None
+        }
+    };
     // Load previously persisted metrics.
     let mut metrics = match Metrics::load_from_file(METRICS_FILE) {
         Ok(metrics) => {
@@ -86,12 +108,19 @@ pub fn start_capture(device: Device, config: &Config) -> Result<(), pcap::Error>
         // Record every captured packet.
         metrics.record_packet(info.packet_size as u64);
 
-        stats.record_packet(
-            info.source_ip.as_deref(),
-            info.destination_port,
-            &info.protocol,
-            info.packet_size,
-        );
+        let is_inbound = info
+            .destination_ip
+            .as_ref()
+            .is_some_and(|destination| local_ipv4s.contains(destination));
+
+        if is_inbound {
+            stats.record_packet(
+                info.source_ip.as_deref(),
+                info.destination_port,
+                &info.protocol,
+                info.packet_size,
+            );
+        }
 
         if stats.should_report() {
             println!(
@@ -229,6 +258,31 @@ pub fn start_capture(device: Device, config: &Config) -> Result<(), pcap::Error>
                                 println!("MITIGATION: skipped — protected local IP {}", source_ip);
                             } else {
                                 let action = mitigation.block_ip(source_ip);
+
+                                if let Some(blocker) = xdp_blocker.as_mut() {
+                                    match source_ip.parse::<std::net::Ipv4Addr>() {
+                                        Ok(ip) => match blocker.block(ip) {
+                                            Ok(()) => {
+                                                println!(
+                                                    "XDP: blocked IP {} added to eBPF map",
+                                                    source_ip
+                                                );
+                                            }
+                                            Err(error) => {
+                                                eprintln!(
+                                                    "XDP: failed to block {}: {}",
+                                                    source_ip, error
+                                                );
+                                            }
+                                        },
+                                        Err(error) => {
+                                            eprintln!(
+                                                "XDP: invalid source IP {}: {}",
+                                                source_ip, error
+                                            );
+                                        }
+                                    }
+                                }
 
                                 println!(
                                     "MITIGATION: {:?} applied to source IP {}",

@@ -68,7 +68,8 @@ pub fn evaluate(
     current_packets_per_second: u64,
     source_concentration: f64,
     destination_port_concentration: f64,
-    threshold: f64,
+    z_score_threshold: f64,
+    anomaly_score_threshold: f64,
 ) -> Option<AnomalyResult> {
     let mean = baseline.mean()?;
     let standard_deviation = baseline.standard_deviation()?;
@@ -76,21 +77,24 @@ pub fn evaluate(
     let current_value = current_packets_per_second as f64;
 
     let z_score = if standard_deviation == 0.0 {
-        if current_value > mean { threshold } else { 0.0 }
+        if current_value > mean {
+            z_score_threshold
+        } else {
+            0.0
+        }
     } else {
         (current_value - mean) / standard_deviation
     };
 
-    // Normalize the traffic anomaly component to 0.0–1.0.
+    // Normalize the traffic anomaly component to 0.0-1.0.
     let traffic_score = if z_score <= 0.0 {
         0.0
     } else {
-        (z_score / threshold).clamp(0.0, 1.0)
+        (z_score / z_score_threshold).clamp(0.0, 1.0)
     };
 
-    // Concentration values are already expected to be 0.0–1.0.
+    // Concentration values are already expected to be 0.0-1.0.
     let source_score = source_concentration.clamp(0.0, 1.0);
-
     let port_score = destination_port_concentration.clamp(0.0, 1.0);
 
     // Weighted combined anomaly score.
@@ -102,21 +106,27 @@ pub fn evaluate(
         source_concentration,
         destination_port_concentration,
         anomaly_score,
-        anomalous: anomaly_score >= 0.80,
+        anomalous: anomaly_score >= anomaly_score_threshold,
     })
 }
 
 #[derive(Debug)]
 pub struct DetectionEngine {
     baseline: TrafficBaseline,
-    threshold: f64,
+    z_score_threshold: f64,
+    anomaly_score_threshold: f64,
 }
 
 impl DetectionEngine {
-    pub fn new(baseline_samples: usize, threshold: f64) -> Self {
+    pub fn new(
+        baseline_samples: usize,
+        z_score_threshold: f64,
+        anomaly_score_threshold: f64,
+    ) -> Self {
         Self {
             baseline: TrafficBaseline::new(baseline_samples),
-            threshold,
+            z_score_threshold,
+            anomaly_score_threshold,
         }
     }
 
@@ -136,7 +146,8 @@ impl DetectionEngine {
             packets_per_second,
             source_concentration,
             destination_port_concentration,
-            self.threshold,
+            self.z_score_threshold,
+            self.anomaly_score_threshold,
         );
 
         self.baseline.add_sample(packets_per_second);
@@ -208,11 +219,11 @@ mod tests {
         baseline.add_sample(95);
         baseline.add_sample(100);
 
-        let result = evaluate(&baseline, 200, 0.50, 0.80, 3.0).unwrap();
+        let result = evaluate(&baseline, 200, 0.50, 0.80, 3.0, 0.40).unwrap();
 
         assert!(result.anomalous);
         assert!(result.z_score > 3.0);
-        assert!(result.anomaly_score >= 0.80);
+        assert!(result.anomaly_score >= 0.40);
         assert_eq!(result.current_value, 200.0);
         assert_eq!(result.source_concentration, 0.50);
         assert_eq!(result.destination_port_concentration, 0.80);
@@ -228,24 +239,24 @@ mod tests {
         baseline.add_sample(95);
         baseline.add_sample(100);
 
-        let result = evaluate(&baseline, 105, 0.50, 0.40, 3.0).unwrap();
+        let result = evaluate(&baseline, 105, 0.50, 0.40, 3.0, 0.40).unwrap();
 
         assert!(!result.anomalous);
-        assert!(result.anomaly_score < 0.80);
+        assert!(result.anomaly_score < 0.40);
     }
 
     #[test]
     fn evaluation_requires_a_baseline() {
         let baseline = TrafficBaseline::new(5);
 
-        let result = evaluate(&baseline, 500, 0.50, 0.80, 3.0);
+        let result = evaluate(&baseline, 500, 0.50, 0.80, 3.0, 0.40);
 
         assert!(result.is_none());
     }
 
     #[test]
     fn detection_engine_learns_before_detecting() {
-        let mut engine = DetectionEngine::new(3, 3.0);
+        let mut engine = DetectionEngine::new(3, 3.0, 0.40);
 
         assert!(!engine.baseline_ready());
         assert_eq!(engine.sample_count(), 0);
@@ -267,7 +278,7 @@ mod tests {
 
     #[test]
     fn detection_engine_detects_anomaly_after_learning() {
-        let mut engine = DetectionEngine::new(5, 3.0);
+        let mut engine = DetectionEngine::new(5, 3.0, 0.40);
 
         engine.process(100, 0.50, 0.40);
         engine.process(105, 0.50, 0.40);
@@ -279,14 +290,14 @@ mod tests {
 
         assert!(result.anomalous);
         assert!(result.z_score > 3.0);
-        assert!(result.anomaly_score >= 0.80);
+        assert!(result.anomaly_score >= 0.40);
         assert_eq!(result.current_value, 500.0);
         assert_eq!(result.destination_port_concentration, 0.80);
     }
 
     #[test]
     fn detection_engine_accepts_normal_traffic() {
-        let mut engine = DetectionEngine::new(5, 3.0);
+        let mut engine = DetectionEngine::new(5, 3.0, 0.40);
 
         engine.process(100, 0.50, 0.40);
         engine.process(105, 0.50, 0.40);
@@ -297,7 +308,7 @@ mod tests {
         let result = engine.process(105, 0.50, 0.40).unwrap();
 
         assert!(!result.anomalous);
-        assert!(result.anomaly_score < 0.80);
+        assert!(result.anomaly_score < 0.40);
     }
 
     #[test]
@@ -310,9 +321,33 @@ mod tests {
         baseline.add_sample(100);
         baseline.add_sample(100);
 
-        let result = evaluate(&baseline, 100, 0.95, 0.95, 3.0).unwrap();
+        let result = evaluate(&baseline, 100, 0.95, 0.95, 3.0, 0.40).unwrap();
 
         assert!(!result.anomalous);
         assert!(result.anomaly_score >= 0.30);
+        assert!(result.anomaly_score < 0.40);
+    }
+
+    #[test]
+    fn anomaly_threshold_controls_anomaly_flag() {
+        let mut baseline = TrafficBaseline::new(5);
+
+        baseline.add_sample(100);
+        baseline.add_sample(105);
+        baseline.add_sample(110);
+        baseline.add_sample(95);
+        baseline.add_sample(100);
+
+        let result_low_threshold = evaluate(&baseline, 105, 0.50, 0.40, 3.0, 0.20).unwrap();
+
+        let result_high_threshold = evaluate(&baseline, 105, 0.50, 0.40, 3.0, 0.40).unwrap();
+
+        assert!(result_low_threshold.anomalous);
+        assert!(!result_high_threshold.anomalous);
+
+        assert_eq!(
+            result_low_threshold.anomaly_score,
+            result_high_threshold.anomaly_score
+        );
     }
 }

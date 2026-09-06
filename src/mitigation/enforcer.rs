@@ -39,6 +39,10 @@ impl FirewallEnforcer {
 
         #[cfg(target_os = "linux")]
         {
+            if !Self::ensure_nftables_structure() {
+                return EnforcementResult::Failed;
+            }
+
             let result = Command::new("nft")
                 .args([
                     "add",
@@ -113,6 +117,61 @@ impl FirewallEnforcer {
             EnforcementResult::Failed
         }
     }
+
+    #[cfg(target_os = "linux")]
+    fn ensure_nftables_structure() -> bool {
+        let table_exists = Command::new("nft")
+            .args(["list", "table", "inet", "ddos_mitigation"])
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false);
+
+        if !table_exists {
+            let table_created = Command::new("nft")
+                .args(["add", "table", "inet", "ddos_mitigation"])
+                .status()
+                .map(|status| status.success())
+                .unwrap_or(false);
+
+            if !table_created {
+                return false;
+            }
+        }
+
+        let set_exists = Command::new("nft")
+            .args(["list", "set", "inet", "ddos_mitigation", "blocked_ips"])
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false);
+
+        if !set_exists {
+            let set_created = Command::new("nft")
+                .args([
+                    "add",
+                    "set",
+                    "inet",
+                    "ddos_mitigation",
+                    "blocked_ips",
+                    "{",
+                    "type",
+                    "ipv4_addr",
+                    ";",
+                    "flags",
+                    "timeout",
+                    ";",
+                    "}",
+                ])
+                .status()
+                .map(|status| status.success())
+                .unwrap_or(false);
+
+            if !set_created {
+                return false;
+            }
+        }
+
+        true
+    }
 }
 
 #[cfg(test)]
@@ -121,10 +180,7 @@ mod tests {
 
     #[test]
     fn enforcement_result_variants_are_distinct() {
-        assert_ne!(
-            EnforcementResult::Applied,
-            EnforcementResult::Failed
-        );
+        assert_ne!(EnforcementResult::Applied, EnforcementResult::Failed);
     }
 
     #[test]
@@ -135,17 +191,16 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn linux_enforcer_can_block_and_unblock_ip() {
+        if unsafe { libc::geteuid() } != 0 {
+            eprintln!("Skipping Linux firewall integration test: root privileges required");
+            return;
+        }
+
         let enforcer = FirewallEnforcer::new();
         let test_ip = "192.0.2.1";
 
-        assert_eq!(
-            enforcer.block_ip(test_ip),
-            EnforcementResult::Applied
-        );
+        assert_eq!(enforcer.block_ip(test_ip), EnforcementResult::Applied);
 
-        assert_eq!(
-            enforcer.unblock_ip(test_ip),
-            EnforcementResult::Applied
-        );
+        assert_eq!(enforcer.unblock_ip(test_ip), EnforcementResult::Applied);
     }
 }

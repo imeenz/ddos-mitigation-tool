@@ -167,3 +167,5 @@ mod tests {
         assert!(manager.should_mitigate(0.90, 0.75));
     }
 }
+
+pub mod xdp;
