@@ -1,3 +1,4 @@
+mod api;
 mod alerts;
 mod analysis;
 mod capture;
@@ -29,6 +30,21 @@ async fn main() -> Result<()> {
         "Configuration loaded"
     );
 
+    // Shared state for the live dashboard API.
+    let state = api::new_shared_state();
+
+    // Start the HTTP API alongside the packet-capture engine.
+    let app = api::router(state.clone());
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
+
+    info!("Live dashboard API listening on http://0.0.0.0:3000");
+
+    tokio::spawn(async move {
+        if let Err(error) = axum::serve(listener, app).await {
+            tracing::error!(%error, "Live dashboard API stopped");
+        }
+    });
+
     let devices = device::list_interfaces()?;
 
     #[cfg(target_os = "linux")]
@@ -46,7 +62,13 @@ async fn main() -> Result<()> {
     if let Some(device) = capture_device {
         info!(interface = %device.name, "Selected capture interface");
 
-        sniffer::start_capture(device.clone(), &config)?;
+        let capture_device = device.clone();
+
+        // pcap is blocking, so run the capture engine on a blocking Tokio thread.
+        tokio::task::spawn_blocking(move || {
+            sniffer::start_capture(capture_device, &config, state.clone())
+        })
+        .await??;
     } else {
         #[cfg(target_os = "linux")]
         eprintln!("Linux capture interface eth0 not found.");

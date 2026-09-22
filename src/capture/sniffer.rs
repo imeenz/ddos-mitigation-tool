@@ -1,3 +1,4 @@
+use crate::api::{SharedState, TrafficSample};
 use crate::alerts::{Alert, AlertManager, AlertSeverity};
 use crate::analysis::AnalysisEngine;
 use crate::capture::parser::parse_packet;
@@ -13,10 +14,13 @@ use std::collections::HashSet;
 
 const ALERTS_FILE: &str = "data/alerts.json";
 const METRICS_FILE: &str = "data/metrics.json";
+const MITIGATION_HISTORY_FILE: &str = "data/mitigation_history.json";
 const MAX_STORED_ALERTS: usize = 100;
 
-pub fn start_capture(device: Device, config: &Config) -> Result<(), pcap::Error> {
+pub fn start_capture(device: Device, config: &Config, state: SharedState) -> Result<(), pcap::Error> {
     println!("Opening interface: {}", device.name);
+    let capture_interface_name = device.name.clone();
+
     let local_ipv4s: HashSet<String> = device
         .addresses
         .iter()
@@ -34,6 +38,12 @@ pub fn start_capture(device: Device, config: &Config) -> Result<(), pcap::Error>
         .timeout(1000)
         .open()?;
 
+    {
+        let mut live_state = state.write().expect("live state lock poisoned");
+        live_state.engine_running = true;
+        live_state.capture_interface = capture_interface_name.clone();
+    }
+
     println!("Listening for packets...\n");
 
     let mut packet_count = 0u64;
@@ -44,16 +54,39 @@ pub fn start_capture(device: Device, config: &Config) -> Result<(), pcap::Error>
 
     let mut mitigation = MitigationManager::new(config.mitigation_block_duration_secs);
 
-    let mut xdp_blocker = match XdpBlocker::open() {
+    match mitigation.load_history_from_file(MITIGATION_HISTORY_FILE) {
+        Ok(()) => {
+            println!(
+                "Loaded {} persisted mitigation events.",
+                mitigation.recent_history(100).len()
+            );
+        }
+        Err(error) => {
+            eprintln!(
+                "Warning: could not load persisted mitigation history: {}",
+                error
+            );
+        }
+    }
+
+    let mut xdp_blocker = match XdpBlocker::start(capture_interface_name.as_str()) {
         Ok(blocker) => {
-            println!("XDP: blocked_ips map opened successfully");
+            println!("XDP: program loaded, attached, and blocked_ips map ready");
             Some(blocker)
         }
         Err(error) => {
-            eprintln!("XDP: could not open blocked_ips map: {}", error);
+            eprintln!("XDP: automatic startup failed: {}", error);
             None
         }
     };
+
+    {
+        let mut live_state = state.write().expect("live state lock poisoned");
+        live_state.protected_ips = config.mitigation_protected_ips.clone();
+        live_state.xdp_enabled = xdp_blocker.is_some();
+        live_state.firewall_enabled = config.mitigation_enforcement_enabled;
+    }
+
     // Load previously persisted metrics.
     let mut metrics = match Metrics::load_from_file(METRICS_FILE) {
         Ok(metrics) => {
@@ -86,6 +119,29 @@ pub fn start_capture(device: Device, config: &Config) -> Result<(), pcap::Error>
             AlertManager::new(MAX_STORED_ALERTS)
         }
     };
+
+    // Restore persisted alert history into the live dashboard state.
+    {
+        let mut live_state = state.write().expect("live state lock poisoned");
+
+        live_state.total_alerts = alert_manager.count() as u64;
+        live_state.critical_alerts =
+            alert_manager.count_by_severity(AlertSeverity::Critical) as u64;
+        live_state.high_alerts =
+            alert_manager.count_by_severity(AlertSeverity::High) as u64;
+        live_state.medium_alerts =
+            alert_manager.count_by_severity(AlertSeverity::Medium) as u64;
+        live_state.low_alerts =
+            alert_manager.count_by_severity(AlertSeverity::Low) as u64;
+
+        live_state.recent_alerts = alert_manager
+            .recent(10)
+            .into_iter()
+            .cloned()
+            .collect();
+
+        live_state.mitigation_history = mitigation.recent_history(10);
+    }
 
     let analysis_engine = AnalysisEngine::new();
 
@@ -123,6 +179,51 @@ pub fn start_capture(device: Device, config: &Config) -> Result<(), pcap::Error>
         }
 
         if stats.should_report() {
+            {
+                let mut live_state = state.write().expect("live state lock poisoned");
+
+                live_state.packets_per_second = stats.packets_per_second();
+                live_state.bytes_per_second = stats.bytes_per_second();
+                live_state.tcp_packets = stats.tcp_packets;
+                live_state.udp_packets = stats.udp_packets;
+                live_state.icmp_packets = stats.icmp_packets;
+
+                live_state.top_source_ips = stats
+                    .top_source_ips(5)
+                    .into_iter()
+                    .map(|(ip, packets)| crate::api::SourceStat { ip: ip.to_string(), packets })
+                    .collect();
+
+                live_state.top_destination_ports = stats
+                    .top_destination_ports(5)
+                    .into_iter()
+                    .map(|(port, packets)| crate::api::PortStat { port, packets })
+                    .collect();
+
+                live_state.source_concentration =
+                    stats.top_source_concentration();
+
+                live_state.destination_port_concentration =
+                    stats.top_destination_port_concentration();
+
+                live_state.traffic_history.push(TrafficSample {
+                    timestamp: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs(),
+                    packets_per_second: stats.packets_per_second(),
+                    bytes_per_second: stats.bytes_per_second(),
+                    tcp_packets: stats.tcp_packets,
+                    udp_packets: stats.udp_packets,
+                    icmp_packets: stats.icmp_packets,
+                });
+
+                if live_state.traffic_history.len() > 60 {
+                    let excess = live_state.traffic_history.len() - 60;
+                    live_state.traffic_history.drain(0..excess);
+                }
+            }
+
             println!(
                 "\n--- Traffic Statistics ---\n\
                  Packets/sec: {}\n\
@@ -257,12 +358,17 @@ pub fn start_capture(device: Device, config: &Config) -> Result<(), pcap::Error>
                             {
                                 println!("MITIGATION: skipped — protected local IP {}", source_ip);
                             } else {
+                                let was_already_blocked = mitigation.is_blocked(source_ip);
                                 let action = mitigation.block_ip(source_ip);
+
+                                let mut xdp_applied = false;
+                                let mut firewall_applied = false;
 
                                 if let Some(blocker) = xdp_blocker.as_mut() {
                                     match source_ip.parse::<std::net::Ipv4Addr>() {
                                         Ok(ip) => match blocker.block(ip) {
                                             Ok(()) => {
+                                                xdp_applied = true;
                                                 println!(
                                                     "XDP: blocked IP {} added to eBPF map",
                                                     source_ip
@@ -298,6 +404,7 @@ pub fn start_capture(device: Device, config: &Config) -> Result<(), pcap::Error>
                                 if config.mitigation_enforcement_enabled {
                                     match enforcer.block_ip(source_ip) {
                                         EnforcementResult::Applied => {
+                                            firewall_applied = true;
                                             println!(
                                                 "ENFORCEMENT: firewall block applied to {}",
                                                 source_ip
@@ -313,6 +420,30 @@ pub fn start_capture(device: Device, config: &Config) -> Result<(), pcap::Error>
                                     }
                                 } else {
                                     println!("ENFORCEMENT: disabled — no firewall rule applied");
+                                }
+
+                                if !was_already_blocked {
+                                    mitigation.record_event(
+                                        source_ip,
+                                        result.anomaly_score,
+                                        xdp_applied,
+                                        firewall_applied,
+                                    );
+
+                                    if let Err(error) =
+                                        mitigation.save_history_to_file(MITIGATION_HISTORY_FILE)
+                                    {
+                                        eprintln!(
+                                            "Warning: failed to persist mitigation history: {}",
+                                            error
+                                        );
+                                    }
+
+                                    let mut live_state =
+                                        state.write().expect("live state lock poisoned");
+
+                                    live_state.mitigation_history =
+                                        mitigation.recent_history(10);
                                 }
                             }
                         }

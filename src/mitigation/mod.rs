@@ -2,8 +2,11 @@ pub mod enforcer;
 
 pub use enforcer::FirewallEnforcer;
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
+use std::fs;
+use std::path::Path;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MitigationAction {
@@ -17,10 +20,21 @@ pub struct BlockEntry {
     pub expires_at: Instant,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MitigationEvent {
+    pub timestamp: u64,
+    pub source_ip: String,
+    pub anomaly_score: f64,
+    pub xdp_applied: bool,
+    pub firewall_applied: bool,
+}
+
 #[derive(Debug)]
 pub struct MitigationManager {
     blocked_ips: HashMap<String, BlockEntry>,
     block_duration: Duration,
+    history: Vec<MitigationEvent>,
+    max_history: usize,
 }
 
 impl MitigationManager {
@@ -28,7 +42,79 @@ impl MitigationManager {
         Self {
             blocked_ips: HashMap::new(),
             block_duration: Duration::from_secs(block_duration_secs),
+            history: Vec::new(),
+            max_history: 100,
         }
+    }
+
+    pub fn record_event(
+        &mut self,
+        source_ip: &str,
+        anomaly_score: f64,
+        xdp_applied: bool,
+        firewall_applied: bool,
+    ) {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        if self.history.len() >= self.max_history {
+            self.history.remove(0);
+        }
+
+        self.history.push(MitigationEvent {
+            timestamp,
+            source_ip: source_ip.to_string(),
+            anomaly_score,
+            xdp_applied,
+            firewall_applied,
+        });
+    }
+
+    pub fn recent_history(&self, limit: usize) -> Vec<MitigationEvent> {
+        self.history.iter().rev().take(limit).cloned().collect()
+    }
+
+    pub fn load_history_from_file<P: AsRef<Path>>(
+        &mut self,
+        path: P,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        if !path.as_ref().exists() {
+            return Ok(());
+        }
+
+        let contents = fs::read_to_string(path)?;
+
+        if contents.trim().is_empty() {
+            return Ok(());
+        }
+
+        let mut history: Vec<MitigationEvent> = serde_json::from_str(&contents)?;
+
+        if history.len() > self.max_history {
+            history = history.split_off(history.len() - self.max_history);
+        }
+
+        self.history = history;
+
+        Ok(())
+    }
+
+    pub fn save_history_to_file<P: AsRef<Path>>(
+        &self,
+        path: P,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some(parent) = path.as_ref().parent()
+            && !parent.as_os_str().is_empty()
+        {
+            fs::create_dir_all(parent)?;
+        }
+
+        let json = serde_json::to_string_pretty(&self.history)?;
+        fs::write(path, json)?;
+
+        Ok(())
     }
     pub fn should_mitigate(&self, anomaly_score: f64, threshold: f64) -> bool {
         anomaly_score >= threshold
@@ -72,6 +158,25 @@ impl MitigationManager {
         self.remove_expired();
 
         self.blocked_ips.len()
+    }
+
+    pub fn blocked_ips_snapshot(&mut self) -> Vec<(String, u64)> {
+        self.remove_expired();
+
+        let now = Instant::now();
+
+        self.blocked_ips
+            .values()
+            .map(|entry| {
+                let remaining_secs = entry
+                    .expires_at
+                    .checked_duration_since(now)
+                    .unwrap_or_default()
+                    .as_secs();
+
+                (entry.source_ip.clone(), remaining_secs)
+            })
+            .collect()
     }
 
     pub fn remove_expired(&mut self) {
