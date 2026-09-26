@@ -6,8 +6,101 @@ The project combines packet capture, statistical anomaly detection, eBPF/XDP, nf
 
 ---
 
+## Dashboard
+
+The project includes a real-time dashboard for monitoring traffic, detection events, alerts, and mitigation status.
+
+### Overview
+
+![DDoS Mitigation Overview](docs/screenshots/overview-1.png)
+
+![DDoS Mitigation Overview](docs/screenshots/overview-2.png)
+
+The Overview page provides the main operational view of the system, including:
+
+- Engine status
+- XDP status
+- Current anomaly score
+- Active blocked IPs
+- Live traffic history
+- Protection status
+- Recent security events
+- Traffic statistics
+- Alert summary
+
+### Traffic Analysis
+
+![Traffic Analysis](docs/screenshots/traffic.png)
+
+The Traffic page focuses on current network activity and traffic concentration.
+
+It provides:
+
+- Packets per second
+- Bytes per second
+- Source IP concentration
+- Destination port concentration
+- Traffic history
+- Protocol distribution
+- Top source IPs
+- Top destination ports
+
+### Detection & Threat Analysis
+
+![Detection and Threat Analysis](docs/screenshots/detection-1.png)
+
+![Detection and Threat Analysis](docs/screenshots/detection-2.png)
+
+The Detection page shows the current detection state and stored security events.
+
+It includes:
+
+- Anomaly score
+- Z-score
+- Critical alerts
+- High alerts
+- Detection history
+- Severity distribution
+- Most suspicious sources
+- Alert types
+- Recent detection events
+
+### Mitigation
+
+![Mitigation](docs/screenshots/mitigation.png)
+
+The Mitigation page shows the current enforcement state and mitigation history.
+
+It includes:
+
+- XDP status
+- Firewall status
+- Active blocks
+- Protected IPs
+- Protection configuration
+- Currently blocked sources
+- Mitigation history
+
+### Alerts
+
+![Alerts](docs/screenshots/alerts.png)
+
+The Alerts page provides the retained alert history.
+
+Alerts can be searched and filtered by information such as:
+
+- Source IP
+- Alert type
+- Severity
+- Packet rate
+- Anomaly score
+- Alert message
+
+---
+
 ## Contents
 
+- [Dashboard](#dashboard)
 - [About](#about)
 - [Features](#features)
 - [Architecture](#architecture)
@@ -21,7 +114,6 @@ The project combines packet capture, statistical anomaly detection, eBPF/XDP, nf
 - [How Mitigation Works](#how-mitigation-works)
 - [eBPF/XDP](#ebpfxdp)
 - [Firewall Enforcement](#firewall-enforcement)
-- [Dashboard](#dashboard)
 - [Testing](#testing)
 - [Useful Commands](#useful-commands)
 - [Security Notes](#security-notes)
@@ -37,12 +129,10 @@ This project is a defensive network security tool written in Rust.
 
 It captures network traffic, extracts traffic statistics, detects abnormal behavior, generates security alerts, and can automatically mitigate suspicious source IP addresses.
 
-The mitigation layer uses two mechanisms:
+The mitigation layer uses:
 
 - eBPF/XDP for early packet filtering
 - nftables for firewall enforcement
-
-A React dashboard provides a live view of traffic, detection events, alerts, and mitigation activity.
 
 The project was developed and tested in a controlled Kali Linux and Metasploitable lab environment.
 
@@ -50,7 +140,7 @@ The project was developed and tested in a controlled Kali Linux and Metasploitab
 
 ## Features
 
-### Traffic monitoring
+### Traffic Monitoring
 
 - Real-time packet capture
 - Packet and byte statistics
@@ -64,12 +154,13 @@ The project was developed and tested in a controlled Kali Linux and Metasploitab
 ### Detection
 
 - Statistical anomaly detection
-- Z-score based analysis
+- Z-score analysis
 - Source IP concentration analysis
 - Destination port concentration analysis
 - Combined anomaly score
 - Security alert generation
-- Severity levels
+- Alert severity levels
+- Persistent alert history
 
 ### Mitigation
 
@@ -77,6 +168,7 @@ The project was developed and tested in a controlled Kali Linux and Metasploitab
 - Configurable mitigation threshold
 - Configurable block duration
 - Protected IP support
+- Active block tracking
 - Automatic block expiration
 - Mitigation history
 
@@ -84,188 +176,208 @@ The project was developed and tested in a controlled Kali Linux and Metasploitab
 
 - eBPF/XDP packet filtering
 - nftables firewall enforcement
-- Active block tracking
+- XDP blocked-IP map
+- Timed firewall blocks
 - Automatic recovery after block expiration
+
+### Dashboard
+
+- Real-time system status
+- Traffic monitoring
+- Detection analysis
+- Mitigation monitoring
+- Alert history
+- Security event history
+- Traffic charts and statistics
 
 ---
 
 ## Architecture
 
-The main flow of the application is:
+The project is divided into several main components.
+
+### Packet Capture
+
+The capture layer receives network packets from the configured interface and extracts relevant information such as:
+
+- Source IP
+- Destination IP
+- Protocol
+- Destination port
+- Packet size
+
+### Traffic Statistics
+
+The application maintains traffic statistics over short time windows.
+
+These statistics are used by the detection engine to identify abnormal traffic behavior.
+
+### Detection Engine
+
+The detection engine analyzes traffic using statistical signals such as:
+
+- Packet rate
+- Z-score
+- Source concentration
+- Destination port concentration
+
+These signals are combined into an anomaly score.
+
+### Mitigation Manager
+
+When the anomaly score reaches the configured mitigation threshold, the mitigation manager checks whether the source IP should be blocked.
+
+Protected IPs are excluded from automatic mitigation.
+
+### Enforcement
+
+When mitigation is applied, the source IP can be enforced through both:
+
+- eBPF/XDP
+- nftables
+
+### API
+
+The Rust backend exposes the current system state through an Axum API.
+
+The frontend uses this API to display live traffic and security information.
+
+### Dashboard
+
+The React dashboard provides the interface for monitoring:
+
+- Traffic
+- Detection
+- Alerts
+- Active mitigation
+- Mitigation history
+- Protection status
+
+---
+
+## Project Structure
 
 ```text
-                    Network Traffic
-                          |
-                          v
-                +-------------------+
-                |   Packet Capture  |
-                |   pcap / parser   |
-                +---------+---------+
-                          |
-                          v
-                +-------------------+
-                |   Traffic Stats   |
-                | packets / bytes   |
-                | IPs / protocols   |
-                +---------+---------+
-                          |
-                          v
-                +-------------------+
-                |  Detection Engine |
-                |                   |
-                | Z-score           |
-                | Source conc.      |
-                | Port conc.        |
-                | Anomaly score     |
-                +---------+---------+
-                          |
-                    anomaly detected
-                          |
-                          v
-                +-------------------+
-                | Mitigation Manager|
-                +---------+---------+
-                          |
-                 +--------+--------+
-                 |                 |
-                 v                 v
-          +-------------+   +-------------+
-          |  eBPF/XDP   |   |  nftables   |
-          | packet drop |   |  firewall   |
-          +-------------+   +-------------+
-                 |                 |
-                 +--------+--------+
-                          |
-                          v
-                    +-----------+
-                    |  Axum API |
-                    +-----+-----+
-                          |
-                          v
-                   React Dashboard
-
-Main flow
-1.Packets are captured from the network interface.
-2.The parser extracts information such as source IP, destination IP, protocol and destination port.
-3.Traffic statistics are updated.
-4.The detection engine analyzes the current traffic window.
-5.An anomaly score is calculated.
-6.If the score reaches the mitigation threshold, the source IP is checked against the protected IP list.
-7.If the IP is not protected, mitigation can be applied.
-8.The IP is added to the XDP blocked-IP map and nftables.
-9.The block remains active for the configured duration.
-10.After expiration, the active block is removed.
-11.The API exposes the current state to the dashboard.
-
-Project Structure
 ddos-mitigation-tool/
-|
 ├── ebpf/
-|   └── xdp_test.c
-|
+│   └── xdp_test.c
+│
 ├── frontend/
-|   ├── src/
-|   |   ├── components/
-|   |   ├── pages/
-|   |   ├── services/
-|   |   └── types/
-|   ├── package.json
-|   └── vite.config.ts
-|
+│   ├── src/
+│   ├── package.json
+│   └── vite.config.ts
+│
 ├── src/
-|   ├── alerts/
-|   ├── analysis/
-|   ├── api/
-|   ├── capture/
-|   ├── config/
-|   ├── detection/
-|   ├── metrics/
-|   ├── mitigation/
-|   └── main.rs
-|
+│   ├── alerts/
+│   ├── analysis/
+│   ├── api/
+│   ├── capture/
+│   ├── config/
+│   ├── detection/
+│   ├── metrics/
+│   ├── mitigation/
+│   └── main.rs
+│
+├── docs/
+│   └── screenshots/
+│       ├── overview-1.png
+│       ├── overview-2.png
+│       ├── traffic.png
+│       ├── detection-1.png
+│       ├── detection-2.png
+│       ├── mitigation.png
+│       └── alerts.png
+│
 ├── .env.example
 ├── Cargo.toml
 ├── Cargo.lock
 └── README.md
+```
 
-Important directories
-src/capture/ — packet capture and parsing
-src/detection/ — anomaly detection
-src/mitigation/ — mitigation and enforcement
-src/alerts/ — alert management
-src/analysis/ — security analysis
-src/metrics/ — runtime and persistent metrics
-src/api/ — Axum API and live state
-src/config/ — application configuration
-ebpf/ — XDP/eBPF program
-frontend/ — React dashboard
+---
 
-Technologies
-| Part              | Technology   |
-| ----------------- | ------------ |
-| Main language     | Rust         |
-| Async runtime     | Tokio        |
-| Packet capture    | pcap         |
-| Packet parsing    | etherparse   |
-| API               | Axum         |
-| Serialization     | Serde / JSON |
-| Logging           | tracing      |
-| eBPF framework    | Aya          |
-| Packet filtering  | eBPF / XDP   |
-| Firewall          | nftables     |
-| Frontend          | React        |
-| Frontend language | TypeScript   |
-| Frontend tooling  | Vite         |
-| Routing           | React Router |
-| Charts            | Recharts     |
-| HTTP client       | Axios        |
+## Technologies
 
-Requirements
+| Component | Technology |
+|---|---|
+| Main language | Rust |
+| Async runtime | Tokio |
+| Packet capture | pcap |
+| Packet parsing | etherparse |
+| API | Axum |
+| Serialization | Serde / JSON |
+| Logging | tracing |
+| eBPF framework | Aya |
+| Packet filtering | eBPF / XDP |
+| Firewall | nftables |
+| Frontend | React |
+| Frontend language | TypeScript |
+| Frontend tooling | Vite |
+| Charts | Recharts |
+| HTTP client | Axios |
 
-The project is mainly intended for Linux because the mitigation layer uses XDP and nftables.
+---
 
-Required
-Linux
-Rust and Cargo
-Clang / LLVM
-libpcap
-nftables
-Node.js
-Yarn
+## Requirements
+
+The project is mainly intended for Linux because the enforcement layer uses XDP and nftables.
+
+### Required
+
+- Linux
+- Rust and Cargo
+- Clang / LLVM
+- libpcap
+- nftables
+- Node.js
+- Yarn
 
 Root privileges are required for packet capture and operations involving XDP and nftables.
 
 The project was developed and tested on Kali Linux.
 
-Installation
+---
+
+## Installation
 
 Clone the repository:
 
+```bash
 git clone https://github.com/imeenz/ddos-mitigation-tool.git
 cd ddos-mitigation-tool
+```
 
 Build the Rust application:
 
+```bash
 cargo build
+```
 
 Install the frontend dependencies:
 
+```bash
 cd frontend
 yarn install
 cd ..
+```
 
 Create the local environment file:
 
+```bash
 cp .env.example .env
+```
 
-The .env file contains local configuration and should not be committed.
+The `.env` file contains local configuration and should not be committed.
 
-Configuration
+---
 
-The main configuration is stored in .env.
+## Configuration
+
+The main configuration is stored in `.env`.
 
 Example:
 
+```env
 APP_NAME=ddos-mitigation-tool
 APP_ENV=development
 LOG_LEVEL=info
@@ -274,360 +386,374 @@ MITIGATION_SCORE_THRESHOLD=0.40
 MITIGATION_BLOCK_DURATION_SECS=60
 MITIGATION_ENFORCEMENT_ENABLED=true
 MITIGATION_PROTECTED_IPS=192.168.13.128
+```
 
-Main variables
-| Variable                         | Description                                  |
-| -------------------------------- | -------------------------------------------- |
-| `APP_NAME`                       | Application name                             |
-| `APP_ENV`                        | Current environment                          |
-| `LOG_LEVEL`                      | Logging level                                |
-| `MITIGATION_SCORE_THRESHOLD`     | Score required to trigger mitigation         |
-| `MITIGATION_BLOCK_DURATION_SECS` | How long an IP remains blocked               |
-| `MITIGATION_ENFORCEMENT_ENABLED` | Enables mitigation enforcement               |
-| `MITIGATION_PROTECTED_IPS`       | IPs that should not be automatically blocked |
+### Configuration Variables
 
+| Variable | Description |
+|---|---|
+| `APP_NAME` | Application name |
+| `APP_ENV` | Application environment |
+| `LOG_LEVEL` | Logging level |
+| `MITIGATION_SCORE_THRESHOLD` | Score required to trigger mitigation |
+| `MITIGATION_BLOCK_DURATION_SECS` | Duration of an active block |
+| `MITIGATION_ENFORCEMENT_ENABLED` | Enables mitigation enforcement |
+| `MITIGATION_PROTECTED_IPS` | IP addresses excluded from automatic mitigation |
 
 Protected IPs are checked before mitigation is applied.
 
-Running the Project
+---
 
-Start the Rust engine
+## Running the Project
+
+### Start the Rust Engine
 
 From the project directory:
+
+```bash
 sudo ./target/debug/ddos-mitigation-tool
+```
 
 The API runs on:
+
+```text
 http://127.0.0.1:3000
+```
 
-Check the live state:
+Check the current system state:
+
+```bash
 curl -s http://127.0.0.1:3000/api/state
+```
 
-Start the dashboard
+### Start the Dashboard
 
-In another terminal:
+Open another terminal:
 
+```bash
 cd frontend
 yarn dev --host 0.0.0.0 --port 5173
+```
 
-Open:
+Then open:
+
+```text
 http://localhost:5173/
+```
 
+---
 
-How Detection Works
+## How Detection Works
 
-The detection engine works on traffic windows and looks at several characteristics of the traffic.
+The detection engine analyzes traffic over short time windows.
 
-The main signals are:
+The main detection signals are:
 
-Packets per second
-Z-score
-Source IP concentration
-Destination port concentration
+### Packets Per Second
 
-These values are combined into an anomaly score.
+The engine tracks the number of packets received during the current traffic window.
 
-Packet rate
-     |
-     +------------------+
-                        |
-Z-score ---------------+
-                        |
-Source concentration --+--> Anomaly Score
-                        |
-Port concentration ----+
-                        |
-                        v
-                Mitigation threshold
+### Z-Score
 
-A high anomaly score does not automatically mean that an IP will be blocked.
+The Z-score measures how far the current traffic level is from the observed baseline.
 
-The mitigation logic also checks the protected IP list and whether enforcement is enabled.
+### Source Concentration
 
-How Mitigation Works
+The engine checks how much of the traffic is coming from the most active source IPs.
 
-When an anomaly reaches the configured mitigation threshold, the mitigation manager handles the response.
+### Port Concentration
 
-Anomaly detected
-       |
-       v
-Check protected IP
-       |
-   +---+---+
-   |       |
-Protected  Not protected
-   |       |
-   v       v
- Skip    Mitigation
-           |
-      +----+----+
-      |         |
-      v         v
-     XDP     nftables
-      |         |
-      +----+----+
-           |
-           v
-      IP is blocked
-           |
-           v
-     Block expires
-           |
-           v
-      IP is removed
+The engine checks how concentrated the traffic is around destination ports.
 
-Active blocks and mitigation history are tracked separately.
+### Anomaly Score
 
-After a block expires, the IP is removed from the active block list while the mitigation event remains available in the history.
+These signals are combined into an anomaly score.
 
-eBPF/XDP
+When the score reaches the configured mitigation threshold, the source IP is evaluated by the mitigation layer.
 
-XDP is used to block traffic early in the Linux networking path.
+A detected anomaly does not automatically mean that the IP will be blocked. Protected IPs and mitigation configuration are checked first.
 
-The XDP program checks the source IPv4 address against the blocked-IP map.
+---
 
-Incoming packet
-      |
-      v
-Read source IP
-      |
-      v
-Is IP in blocked map?
-      |
-   +--+--+
-   |     |
-  Yes    No
-   |     |
-   v     v
- DROP   PASS
+## How Mitigation Works
+
+When a source reaches the configured mitigation threshold:
+
+1. The source IP is identified.
+2. The protected IP list is checked.
+3. Protected IPs are excluded from automatic mitigation.
+4. If the IP is not protected, the mitigation manager can apply a block.
+5. The IP is added to the XDP blocked-IP map.
+6. The IP can also be added to the nftables blocked-IP set.
+7. The active block is tracked by the application.
+8. After the configured duration, the active block expires.
+9. The IP is removed from the active mitigation state.
+10. The mitigation event remains available in the history.
+
+---
+
+## eBPF/XDP
+
+XDP is used to filter packets early in the Linux networking path.
+
+The XDP program checks the source IPv4 address against a blocked-IP map.
+
+If the source IP is present in the map, the packet is dropped.
+
+Otherwise, the packet continues through the normal networking path.
 
 The Rust application uses Aya to interact with the eBPF program.
 
-Compile the XDP program
+### Compile the XDP Program
+
+```bash
 clang -O2 -g -target bpf \
   -I/usr/include/x86_64-linux-gnu \
   -c ebpf/xdp_test.c \
   -o ebpf/xdp_test.o
+```
 
-Attach XDP
+### Attach XDP
+
+```bash
 sudo ip link set dev eth0 xdp obj ebpf/xdp_test.o sec xdp
+```
 
-Detach XDP
+### Detach XDP
+
+```bash
 sudo ip link set dev eth0 xdp off
+```
 
-The interface name may be different on another system.
+The network interface may be different on another system.
 
 The blocked-IP map is pinned under:
+
+```text
 /sys/fs/bpf/ddos-mitigation/blocked_ips
+```
 
-Check it with:
+Check the map:
+
+```bash
 sudo bpftool map dump name blocked_ips
+```
 
-Firewall Enforcement
+---
 
-The project also uses nftables as a second enforcement layer.
+## Firewall Enforcement
 
-The application manages the:
+The project uses nftables as a second enforcement layer.
 
-inet ddos_mitigation
+The application manages the `inet ddos_mitigation` table and its `blocked_ips` set.
 
-table and its:
+Check the current blocked-IP set:
 
-blocked_ips
-
-set.
-
-During mitigation, the source IP can be added to the set with a timeout.
-
-Check the current set:
-
+```bash
 sudo nft list set inet ddos_mitigation blocked_ips
+```
 
-This gives the project two enforcement layers:
+The enforcement layers serve different purposes:
 
-Detected IP
-    |
-    +------> eBPF/XDP
-    |
-    +------> nftables
+- **eBPF/XDP** provides early packet filtering.
+- **nftables** provides firewall-level enforcement and timed entries.
 
-Dashboard
+Using both layers also provides a way to verify that mitigation is being applied at both the XDP and firewall levels.
 
-The project includes a React dashboard connected to the Rust API.
+---
 
-The dashboard provides a live view of the current state of the engine.
+## Testing
 
-It includes:
+Testing was performed in a controlled lab environment using Kali Linux and Metasploitable.
 
-Engine status
-Capture interface
-XDP status
-Firewall status
-Packets per second
-Bytes per second
-Current anomaly score
-Active blocked IPs
-Protocol statistics
-Top source IPs
-Destination ports
-Recent alerts
-Mitigation history
+### Lab Environment
 
-The dashboard is divided into views for traffic, detection, mitigation and security events.
+| System | IP |
+|---|---|
+| Metasploitable | `192.168.13.128` |
+| Kali Linux | `192.168.13.130` |
 
-Testing
+### Tested Components
 
-Testing was performed in a controlled lab using Kali Linux and Metasploitable.
+| Test | Result |
+|---|---|
+| Engine / API | PASS |
+| Normal traffic | PASS |
+| ICMP traffic | PASS |
+| UDP traffic | PASS |
+| Anomaly detection | PASS |
+| Protected IP handling | PASS |
+| XDP enforcement | PASS |
+| nftables enforcement | PASS |
+| Automatic mitigation | PASS |
+| Block expiration | PASS |
+| Firewall recovery | PASS |
+| Dashboard state | PASS |
+| Rust test suite | PASS |
 
-Lab setup
-Metasploitable
-192.168.13.128
-       |
-       | Test traffic
-       v
-Kali Linux
-192.168.13.130
-       |
-       +-- Rust DDoS engine
-       +-- XDP
-       +-- nftables
-       +-- React dashboard
-Test results
-Test	Result
-Engine / API	PASS
-Normal traffic	PASS
-ICMP traffic	PASS
-UDP traffic	PASS
-Anomaly detection	PASS
-Protected IP handling	PASS
-XDP enforcement	PASS
-nftables enforcement	PASS
-Automatic mitigation	PASS
-Block expiration	PASS
-Firewall recovery	PASS
-Dashboard state	PASS
-Rust test suite	PASS
-Protected IP test
+### Protected IP Test
 
-A protected IP was used during testing to verify that detection does not automatically lead to blocking.
+A protected IP was used to verify that detection does not automatically lead to blocking.
 
 The engine detected the traffic but skipped mitigation:
 
+```text
 ANOMALY DETECTED
 
 MITIGATION: skipped — protected local IP 192.168.13.128
 Blocked IPs: 0
-Automatic mitigation test
+```
+
+### Automatic Mitigation Test
 
 For the controlled mitigation test, the protected-IP exception was temporarily removed.
 
-The engine then produced:
+The engine then applied mitigation:
 
+```text
 XDP: blocked IP 192.168.13.128 added to eBPF map
 MITIGATION: Block applied to source IP 192.168.13.128
 Currently blocked IPs: 1
 ENFORCEMENT: firewall block applied to 192.168.13.128
+```
 
 The test traffic was then blocked.
 
-Block expiration test
+### Block Expiration Test
 
-The configured block duration was 60 seconds.
+The configured block duration was tested.
 
-After the block expired:
+After expiration, the active block returned to zero and the nftables set was checked to confirm that the expired block was no longer active.
 
-Blocked IPs: 0
+This verified the complete mitigation and recovery cycle.
 
-The nftables set was also checked and confirmed to be empty.
+### Rust Tests
 
-This verified the full cycle:
+Run the Rust test suite with:
 
-Detection
-   ↓
-Mitigation
-   ↓
-XDP + nftables block
-   ↓
-Block timeout
-   ↓
-Automatic recovery
-Rust tests
-
-The Rust test suite was executed with:
-
+```bash
 cargo test
-Useful Commands
-Build
+```
+
+---
+
+## Useful Commands
+
+### Build
+
+```bash
 cargo build
-Run tests
+```
+
+### Run Tests
+
+```bash
 cargo test
-Run the engine
+```
+
+### Run the Engine
+
+```bash
 sudo ./target/debug/ddos-mitigation-tool
-Start the frontend
+```
+
+### Start the Frontend
+
+```bash
 cd frontend
 yarn dev --host 0.0.0.0 --port 5173
-Check API state
+```
+
+### Check API State
+
+```bash
 curl -s http://127.0.0.1:3000/api/state | python3 -m json.tool
-Check nftables
+```
+
+### Check nftables
+
+```bash
 sudo nft list set inet ddos_mitigation blocked_ips
-Check XDP map
+```
+
+### Check XDP Map
+
+```bash
 sudo bpftool map dump name blocked_ips
-Check Git status
+```
+
+### Check Git Status
+
+```bash
 git status
-Security Notes
+```
 
-This project is intended for defensive security research, education and authorized testing.
+---
 
-Only test against systems and networks you own or are authorized to test.
-XDP and nftables operations require elevated privileges.
-An aggressive detection threshold can result in legitimate traffic being blocked.
-Protected IPs should be configured carefully.
-The dashboard/API should not be exposed publicly without appropriate access controls.
-XDP support depends on the Linux kernel, network interface and driver.
-Detection thresholds should be tuned for the environment where the system is deployed.
-Limitations
+## Security Notes
 
-The current version is a functional prototype and was validated in a controlled lab environment.
+This project is intended for defensive security research, education, and authorized testing.
 
-Some current limitations are:
+- Only test against systems and networks you own or are authorized to test.
+- XDP and nftables operations require elevated privileges.
+- An aggressive detection threshold can result in legitimate traffic being blocked.
+- Protected IPs should be configured carefully.
+- The dashboard/API should not be exposed publicly without appropriate access controls.
+- XDP support depends on the Linux kernel, network interface, and driver.
+- Detection thresholds should be tuned for the environment where the system is deployed.
 
-Linux is required for the XDP and nftables enforcement layer.
-Detection is currently based on statistical analysis rather than machine learning.
-Detection thresholds need to be tuned for different network environments.
-XDP support depends on the available kernel and network interface.
-Testing was performed in a controlled laboratory setup.
-The current system is designed as a local mitigation engine rather than a distributed DDoS protection system.
-Future Improvements
+---
+
+## Limitations
+
+The current version is a functional prototype validated in a controlled lab environment.
+
+Current limitations include:
+
+- Linux is required for the XDP and nftables enforcement layer.
+- Detection is based on statistical analysis rather than machine learning.
+- Detection thresholds need to be tuned for different environments.
+- XDP support depends on the Linux kernel, network interface, and driver.
+- Testing was performed in a controlled laboratory environment.
+- The current system is designed as a local mitigation engine rather than a distributed DDoS protection platform.
+
+---
+
+## Future Improvements
 
 Possible future work includes:
 
-Machine-learning-based traffic classification
-Distributed detection sensors
-Centralized SIEM integration
-Threat intelligence integration
-More advanced rate limiting
-Improved TCP traffic analysis
-Centralized event storage
-High-availability deployment
-Containerized deployment
-Cloud-based monitoring
-Project Status
+- Machine-learning-based traffic classification
+- Distributed detection sensors
+- Centralized SIEM integration
+- Threat intelligence integration
+- More advanced rate limiting
+- Improved TCP traffic analysis
+- Centralized event storage
+- High-availability deployment
+- Containerized deployment
+- Cloud-based monitoring
+
+---
+
+## Project Status
 
 The current version is a functional prototype.
 
-The following parts have been implemented and tested:
+Implemented components include:
 
-Real-time packet capture
-Traffic statistics
-Protocol detection
-Statistical anomaly detection
-Security alerts
-Automatic IP mitigation
-eBPF/XDP enforcement
-nftables enforcement
-Protected IP handling
-Timed block expiration
-Metrics and persistence
-Axum API
-React dashboard
+- Real-time packet capture
+- Traffic statistics
+- Protocol detection
+- Statistical anomaly detection
+- Security alerts
+- Automatic IP mitigation
+- eBPF/XDP enforcement
+- nftables enforcement
+- Protected IP handling
+- Timed block expiration
+- Metrics and persistence
+- Axum API
+- React dashboard
 
 The system has been tested in a controlled Kali Linux and Metasploitable environment.
